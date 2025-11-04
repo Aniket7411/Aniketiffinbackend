@@ -64,10 +64,11 @@ const ReviewSchema = new mongoose.Schema(
 
     // Review aspects (for providers)
     aspects: {
-      foodQuality: { type: Number, min: 1, max: 5 },
-      hygiene: { type: Number, min: 1, max: 5 },
-      punctuality: { type: Number, min: 1, max: 5 },
-      behavior: { type: Number, min: 1, max: 5 },
+      taste: { type: Number, min: 1, max: 5 },
+      quality: { type: Number, min: 1, max: 5 },
+      quantity: { type: Number, min: 1, max: 5 },
+      packaging: { type: Number, min: 1, max: 5 },
+      timeliness: { type: Number, min: 1, max: 5 },
     },
   },
   {

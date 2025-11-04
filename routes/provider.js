@@ -8,6 +8,7 @@ const {
     getProviderById,
     getConnectionRequests,
 } = require('../controllers/providerController');
+const { getProviderReviews } = require('../controllers/reviewController');
 const { protect, provider } = require('../middleware/auth');
 const { providerRegisterValidation, validate } = require('../middleware/validation');
 
@@ -34,6 +35,9 @@ const optionalAuth = (req, res, next) => {
 // Public routes (optional auth for contact visibility)
 router.post('/register', providerRegisterValidation, validate, registerProvider);
 router.get('/search', optionalAuth, searchProviders);
+
+// Provider reviews - MUST BE BEFORE /:providerId
+router.get('/:providerId/reviews', getProviderReviews);
 
 // Protected routes (provider only) - MUST BE BEFORE /:providerId
 router.get('/profile/me', protect, provider, getMyProfile);

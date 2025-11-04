@@ -1,66 +1,101 @@
 const Review = require('../models/Review');
-const Order = require('../models/Order');
-const Vendor = require('../models/Vendor');
+const Subscription = require('../models/Subscription');
+const Provider = require('../models/Provider');
+const Tenant = require('../models/Tenant');
 
 // @desc    Add review
 // @route   POST /api/reviews
 // @access  Private
 const addReview = async (req, res) => {
     try {
-        const { orderId, vendorId, rating, comment } = req.body;
+        const { providerId, subscriptionId, rating, comment, aspects } = req.body;
 
-        // Check if order exists and belongs to user
-        const order = await Order.findById(orderId);
-
-        if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: 'Order not found',
-            });
-        }
-
-        if (order.userId.toString() !== req.user._id.toString()) {
+        // Validate that user is a tenant
+        if (req.user.role !== 'tenant') {
             return res.status(403).json({
                 success: false,
-                message: 'Not authorized to review this order',
+                message: 'Only tenants can review providers',
             });
         }
 
-        if (order.status !== 'delivered') {
+        // Get tenant profile
+        const tenant = await Tenant.findOne({ userId: req.user._id });
+        if (!tenant) {
+            return res.status(404).json({
+                success: false,
+                message: 'Tenant profile not found',
+            });
+        }
+
+        // Check if subscription exists and belongs to user
+        const subscription = await Subscription.findById(subscriptionId);
+        if (!subscription) {
+            return res.status(404).json({
+                success: false,
+                message: 'Subscription not found',
+            });
+        }
+
+        if (subscription.tenantUserId.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to review this subscription',
+            });
+        }
+
+        // Check if subscription is active or completed
+        if (!['active', 'completed'].includes(subscription.status)) {
             return res.status(400).json({
                 success: false,
-                message: 'Can only review delivered orders',
+                message: 'Can only review active or completed subscriptions',
             });
         }
 
         // Check if review already exists
         const existingReview = await Review.findOne({
-            userId: req.user._id,
-            orderId,
+            reviewerId: req.user._id,
+            subscriptionId,
         });
 
         if (existingReview) {
             return res.status(400).json({
                 success: false,
-                message: 'Review already submitted for this order',
+                message: 'Review already submitted for this subscription',
+            });
+        }
+
+        // Get provider profile
+        const provider = await Provider.findById(providerId).populate('userId');
+        if (!provider) {
+            return res.status(404).json({
+                success: false,
+                message: 'Provider not found',
             });
         }
 
         // Create review
         const review = await Review.create({
-            userId: req.user._id,
-            vendorId,
-            orderId,
+            reviewerId: req.user._id,
+            reviewerType: 'tenant',
+            reviewerProfileId: tenant._id,
+            reviewerModel: 'Tenant',
+            revieweeId: provider.userId._id,
+            revieweeType: 'provider',
+            revieweeProfileId: provider._id,
+            revieweeModel: 'Provider',
+            subscriptionId,
             rating,
             comment,
+            aspects: aspects || {},
         });
 
-        // Update vendor rating
-        const reviews = await Review.find({ vendorId });
+        // Update provider rating
+        const reviews = await Review.find({ revieweeProfileId: provider._id });
         const avgRating = reviews.reduce((acc, item) => acc + item.rating, 0) / reviews.length;
 
-        await Vendor.findByIdAndUpdate(vendorId, {
+        await Provider.findByIdAndUpdate(provider._id, {
             rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
+            totalReviews: reviews.length,
         });
 
         res.status(201).json({
@@ -83,9 +118,9 @@ const addReview = async (req, res) => {
 // @access  Private
 const getMyReviews = async (req, res) => {
     try {
-        const reviews = await Review.find({ userId: req.user._id })
-            .populate('vendorId', 'businessName')
-            .populate('orderId', 'orderNumber')
+        const reviews = await Review.find({ reviewerId: req.user._id })
+            .populate('revieweeProfileId')
+            .populate('subscriptionId', 'subscriptionNumber plan startDate')
             .sort({ createdAt: -1 });
 
         res.status(200).json({
@@ -107,7 +142,7 @@ const getMyReviews = async (req, res) => {
 // @access  Private
 const updateReview = async (req, res) => {
     try {
-        const { rating, comment } = req.body;
+        const { rating, comment, aspects } = req.body;
 
         const review = await Review.findById(req.params.reviewId);
 
@@ -118,7 +153,7 @@ const updateReview = async (req, res) => {
             });
         }
 
-        if (review.userId.toString() !== req.user._id.toString()) {
+        if (review.reviewerId.toString() !== req.user._id.toString()) {
             return res.status(403).json({
                 success: false,
                 message: 'Not authorized',
@@ -127,14 +162,16 @@ const updateReview = async (req, res) => {
 
         review.rating = rating || review.rating;
         review.comment = comment || review.comment;
+        if (aspects) review.aspects = aspects;
         await review.save();
 
-        // Recalculate vendor rating
-        const reviews = await Review.find({ vendorId: review.vendorId });
+        // Recalculate provider rating
+        const reviews = await Review.find({ revieweeProfileId: review.revieweeProfileId });
         const avgRating = reviews.reduce((acc, item) => acc + item.rating, 0) / reviews.length;
 
-        await Vendor.findByIdAndUpdate(review.vendorId, {
+        await Provider.findByIdAndUpdate(review.revieweeProfileId, {
             rating: Math.round(avgRating * 10) / 10,
+            totalReviews: reviews.length,
         });
 
         res.status(200).json({
@@ -166,24 +203,25 @@ const deleteReview = async (req, res) => {
             });
         }
 
-        if (review.userId.toString() !== req.user._id.toString()) {
+        if (review.reviewerId.toString() !== req.user._id.toString()) {
             return res.status(403).json({
                 success: false,
                 message: 'Not authorized',
             });
         }
 
-        const vendorId = review.vendorId;
+        const providerId = review.revieweeProfileId;
         await Review.findByIdAndDelete(req.params.reviewId);
 
-        // Recalculate vendor rating
-        const reviews = await Review.find({ vendorId });
+        // Recalculate provider rating
+        const reviews = await Review.find({ revieweeProfileId: providerId });
         const avgRating = reviews.length > 0
             ? reviews.reduce((acc, item) => acc + item.rating, 0) / reviews.length
             : 0;
 
-        await Vendor.findByIdAndUpdate(vendorId, {
+        await Provider.findByIdAndUpdate(providerId, {
             rating: Math.round(avgRating * 10) / 10,
+            totalReviews: reviews.length,
         });
 
         res.status(200).json({
@@ -198,10 +236,62 @@ const deleteReview = async (req, res) => {
     }
 };
 
+// @desc    Get provider reviews
+// @route   GET /provider/:providerId/reviews
+// @access  Public (called from provider routes)
+const getProviderReviews = async (req, res) => {
+    try {
+        const { page = 1, limit = 10 } = req.query;
+        const providerId = req.params.providerId;
+
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        const reviews = await Review.find({ 
+            revieweeProfileId: providerId,
+            revieweeType: 'provider'
+        })
+            .populate('reviewerProfileId', 'displayName')
+            .select('reviewerProfileId rating comment aspects createdAt')
+            .sort({ createdAt: -1 })
+            .limit(limitNum)
+            .skip(skip);
+
+        const totalReviews = await Review.countDocuments({ 
+            revieweeProfileId: providerId,
+            revieweeType: 'provider'
+        });
+
+        // Calculate average rating
+        const allReviews = await Review.find({ 
+            revieweeProfileId: providerId,
+            revieweeType: 'provider'
+        });
+        const averageRating = allReviews.length > 0
+            ? Math.round((allReviews.reduce((acc, item) => acc + item.rating, 0) / allReviews.length) * 10) / 10
+            : 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                reviews,
+                totalReviews,
+                averageRating,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 module.exports = {
     addReview,
     getMyReviews,
     updateReview,
     deleteReview,
+    getProviderReviews,
 };
-

@@ -30,33 +30,37 @@ const ConnectionRequestSchema = new mongoose.Schema(
             required: true,
         },
 
-    message: {
-      type: String,
-      maxlength: 500,
-    },
-    
-    // Sample Food Request
-    sampleFoodRequest: {
-      type: Boolean,
-      default: false,
-    },
-    sampleFoodApproved: {
-      type: Boolean,
-      default: false,
-    },
-    
-    // Status
-    status: {
-      type: String,
-      enum: ['pending', 'accepted', 'rejected', 'expired'],
-      default: 'pending',
-    },
-    
-    // Contact Sharing
-    contactShared: {
-      type: Boolean,
-      default: false,
-    },
+        message: {
+            type: String,
+            maxlength: 500,
+        },
+        monthlyBudget: {
+            type: Number,
+            default: 0,
+        },
+
+        // Sample Food Request
+        sampleFoodRequest: {
+            type: Boolean,
+            default: false,
+        },
+        sampleFoodApproved: {
+            type: Boolean,
+            default: false,
+        },
+
+        // Status
+        status: {
+            type: String,
+            enum: ['pending', 'accepted', 'rejected', 'expired'],
+            default: 'pending',
+        },
+
+        // Contact Sharing
+        contactShared: {
+            type: Boolean,
+            default: false,
+        },
 
         // KYC Check
         tenantKycVerified: {
@@ -68,12 +72,12 @@ const ConnectionRequestSchema = new mongoose.Schema(
             default: false,
         },
 
-    // Response
-    providerMessage: {
-      type: String,
-      maxlength: 500,
-    },
-    respondedAt: Date,
+        // Response
+        providerMessage: {
+            type: String,
+            maxlength: 500,
+        },
+        respondedAt: Date,
 
         // Expiry
         expiresAt: {

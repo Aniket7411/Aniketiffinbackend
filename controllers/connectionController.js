@@ -8,8 +8,8 @@ const { createNotification } = require('./notificationController');
 // @route   POST /api/connection/request
 // @access  Private (Tenant)
 const sendConnectionRequest = async (req, res) => {
-  try {
-    const { providerId, message, sampleFoodRequest } = req.body;
+    try {
+        const { providerId, message, sampleFoodRequest } = req.body;
 
         // Check if user is tenant
         if (req.user.role !== 'tenant') {
@@ -67,32 +67,55 @@ const sendConnectionRequest = async (req, res) => {
             });
         }
 
-    // Create connection request
-    const connectionRequest = await ConnectionRequest.create({
-      tenantId: tenant._id,
-      providerId: provider._id,
-      tenantUserId: req.user._id,
-      providerUserId: provider.userId._id,
-      requestedBy: 'tenant',
-      message,
-      sampleFoodRequest: sampleFoodRequest || false,
-      tenantKycVerified: tenant.kycStatus === 'verified',
-      providerKycVerified: provider.kycStatus === 'verified',
-    });
+        // Create connection request
+        const connectionRequest = await ConnectionRequest.create({
+            tenantId: tenant._id,
+            providerId: provider._id,
+            tenantUserId: req.user._id,
+            providerUserId: provider.userId._id,
+            requestedBy: 'tenant',
+            message,
+            monthlyBudget: tenant.monthlyBudget,
+            sampleFoodRequest: sampleFoodRequest || false,
+            tenantKycVerified: tenant.kycStatus === 'verified',
+            providerKycVerified: provider.kycStatus === 'verified',
+        });
 
-    // Send notification to provider
-    await createNotification(
-      provider.userId._id,
-      'connection_request',
-      'New Connection Request',
-      `${tenant.displayName || req.user.name} sent you a connection request${sampleFoodRequest ? ' with sample food request' : ''}`,
-      {
-        requestId: connectionRequest._id,
-        tenantId: tenant._id,
-        tenantName: tenant.displayName || req.user.name,
-        sampleFoodRequest,
-      }
-    );
+        // Get tenant user for phone number
+        const tenantUser = await User.findById(req.user._id);
+
+        // Send notification to provider (include tenant phone for business purposes)
+        await createNotification(
+            provider.userId._id,
+            'connection_request',
+            'New Connection Request',
+            `${tenant.displayName || req.user.name} sent you a connection request${sampleFoodRequest ? ' with sample food request' : ''}`,
+            {
+                requestId: connectionRequest._id,
+                tenantId: tenant._id,
+                tenantName: tenant.displayName || req.user.name,
+                tenantPhone: tenantUser?.phone || '',
+                sampleFoodRequest,
+            }
+        );
+
+        // Send notification to admin (include tenant phone for mediation/coordination)
+        const adminUsers = await User.find({ role: 'admin' });
+        for (const admin of adminUsers) {
+            await createNotification(
+                admin._id,
+                'admin_connection_request',
+                'New Connection Request',
+                `${tenant.displayName || req.user.name} sent a connection request to ${provider.displayName}`,
+                {
+                    requestId: connectionRequest._id,
+                    tenantId: tenant._id,
+                    providerId: provider._id,
+                    tenantName: tenant.displayName || req.user.name,
+                    tenantPhone: tenantUser?.phone || '',
+                }
+            );
+        }
 
         res.status(201).json({
             success: true,
@@ -111,8 +134,8 @@ const sendConnectionRequest = async (req, res) => {
 // @route   PUT /api/connection/respond/:requestId
 // @access  Private (Provider)
 const respondToRequest = async (req, res) => {
-  try {
-    const { status, message, sampleFoodApproved } = req.body; // status: 'accepted' or 'rejected'
+    try {
+        const { status, message, sampleFoodApproved } = req.body; // status: 'accepted' or 'rejected'
 
         if (!['accepted', 'rejected'].includes(status)) {
             return res.status(400).json({
@@ -145,39 +168,39 @@ const respondToRequest = async (req, res) => {
             });
         }
 
-    request.status = status;
-    request.providerMessage = message || '';
-    request.respondedAt = new Date();
-    
-    // If accepted, share contacts and handle sample food
-    if (status === 'accepted') {
-      request.contactShared = true;
-      if (request.sampleFoodRequest && sampleFoodApproved !== undefined) {
-        request.sampleFoodApproved = sampleFoodApproved;
-      }
-    }
+        request.status = status;
+        request.providerMessage = message || '';
+        request.respondedAt = new Date();
 
-    await request.save();
+        // If accepted, share contacts and handle sample food
+        if (status === 'accepted') {
+            request.contactShared = true;
+            if (request.sampleFoodRequest && sampleFoodApproved !== undefined) {
+                request.sampleFoodApproved = sampleFoodApproved;
+            }
+        }
 
-    // Send notification to tenant
-    const notificationType = status === 'accepted' ? 'request_accepted' : 'request_rejected';
-    const notificationTitle = status === 'accepted' ? 'Request Accepted!' : 'Request Declined';
-    const notificationMessage = status === 'accepted' 
-      ? `Your connection request has been accepted by the provider`
-      : `Your connection request was declined`;
+        await request.save();
 
-    await createNotification(
-      request.tenantUserId,
-      notificationType,
-      notificationTitle,
-      notificationMessage,
-      {
-        requestId: request._id,
-        providerId: request.providerId,
-        status,
-        sampleFoodApproved: request.sampleFoodApproved,
-      }
-    );
+        // Send notification to tenant
+        const notificationType = status === 'accepted' ? 'request_accepted' : 'request_rejected';
+        const notificationTitle = status === 'accepted' ? 'Request Accepted!' : 'Request Declined';
+        const notificationMessage = status === 'accepted'
+            ? `Your connection request has been accepted by the provider`
+            : `Your connection request was declined`;
+
+        await createNotification(
+            request.tenantUserId,
+            notificationType,
+            notificationTitle,
+            notificationMessage,
+            {
+                requestId: request._id,
+                providerId: request.providerId,
+                status,
+                sampleFoodApproved: request.sampleFoodApproved,
+            }
+        );
 
         res.status(200).json({
             success: true,
@@ -225,9 +248,53 @@ const getMyRequests = async (req, res) => {
     }
 };
 
+// @desc    Get connection request by ID
+// @route   GET /api/connection/request/:requestId
+// @access  Private
+const getConnectionRequestById = async (req, res) => {
+    try {
+        const request = await ConnectionRequest.findById(req.params.requestId)
+            .populate('tenantId')
+            .populate('tenantUserId', 'name email phone')
+            .populate('providerId')
+            .populate('providerUserId', 'name email phone');
+
+        if (!request) {
+            return res.status(404).json({
+                success: false,
+                message: 'Connection request not found',
+            });
+        }
+
+        // Check authorization - user must be either tenant or provider involved
+        const isAuthorized =
+            request.tenantUserId.toString() === req.user._id.toString() ||
+            request.providerUserId.toString() === req.user._id.toString() ||
+            req.user.role === 'admin';
+
+        if (!isAuthorized) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to view this request',
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: { request },
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 module.exports = {
     sendConnectionRequest,
     respondToRequest,
     getMyRequests,
+    getConnectionRequestById,
 };
 

@@ -106,6 +106,10 @@ const TenantSchema = new mongoose.Schema(
                 default: true, // true = per meal, false = per day
             },
         },
+        monthlyBudget: {
+            type: Number,
+            default: 0,
+        },
 
         // Additional Info
         specialRequirements: String,

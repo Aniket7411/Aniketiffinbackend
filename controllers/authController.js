@@ -124,11 +124,19 @@ const loginAdmin = async (req, res) => {
   try {
     const { email, password, adminCode } = req.body;
 
+    // Check if ADMIN_SECRET_CODE is configured
+    if (!process.env.ADMIN_SECRET_CODE) {
+      return res.status(500).json({
+        success: false,
+        message: 'Admin secret code not configured. Please add ADMIN_SECRET_CODE to .env file',
+      });
+    }
+
     // Verify admin code
     if (adminCode !== process.env.ADMIN_SECRET_CODE) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid admin code',
+        message: 'Invalid admin code. Please check your admin code.',
       });
     }
 
@@ -138,7 +146,7 @@ const loginAdmin = async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials',
+        message: 'Admin user not found. Please check email or run seed:admin script.',
       });
     }
 
@@ -148,7 +156,7 @@ const loginAdmin = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials',
+        message: 'Invalid password',
       });
     }
 
@@ -160,6 +168,7 @@ const loginAdmin = async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
+          phone: user.phone,
           role: user.role,
         },
         token: generateToken(user._id, user.email, user.role),

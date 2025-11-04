@@ -134,7 +134,7 @@ const updateProfile = async (req, res) => {
             });
         }
 
-        // Update allowed fields
+        // Update allowed fields in provider profile
         const allowedUpdates = [
             'displayName',
             'bio',
@@ -155,6 +155,15 @@ const updateProfile = async (req, res) => {
                 provider[field] = req.body[field];
             }
         });
+
+        // Update phone in User model if provided
+        if (req.body.phone) {
+            const user = await User.findById(req.user._id);
+            if (user) {
+                user.phone = req.body.phone;
+                await user.save();
+            }
+        }
 
         await provider.save();
 
@@ -307,6 +316,14 @@ const getProviderById = async (req, res) => {
         }
 
         const providerObj = provider.toObject();
+
+        // Admin can see all information including phone
+        if (req.user && req.user.role === 'admin') {
+            return res.status(200).json({
+                success: true,
+                data: { provider: providerObj },
+            });
+        }
 
         // Check if requester is premium or has accepted connection
         let contactVisible = false;

@@ -80,6 +80,7 @@ const registerTenant = async (req, res) => {
                     id: user._id,
                     name: user.name,
                     email: user.email,
+                    phone: user.phone,
                     role: user.role,
                 },
                 tenant: {
@@ -147,7 +148,7 @@ const updateProfile = async (req, res) => {
             });
         }
 
-        // Update allowed fields
+        // Update allowed fields in tenant profile
         const allowedUpdates = [
             'displayName',
             'accommodationType',
@@ -164,6 +165,15 @@ const updateProfile = async (req, res) => {
                 tenant[field] = req.body[field];
             }
         });
+
+        // Update phone in User model if provided
+        if (req.body.phone) {
+            const user = await User.findById(req.user._id);
+            if (user) {
+                user.phone = req.body.phone;
+                await user.save();
+            }
+        }
 
         await tenant.save();
 
@@ -186,9 +196,68 @@ const updateProfile = async (req, res) => {
     }
 };
 
+// @desc    Get tenant details by ID
+// @route   GET /api/tenant/:tenantId
+// @access  Public (with visibility rules)
+const getTenantById = async (req, res) => {
+    try {
+        const tenant = await Tenant.findById(req.params.tenantId)
+            .populate('userId', 'name email phone isPremium')
+            .select('-kycDocuments');
+
+        if (!tenant) {
+            return res.status(404).json({
+                success: false,
+                message: 'Tenant not found',
+            });
+        }
+
+        const tenantObj = tenant.toObject();
+
+        // Admin can see all information including phone
+        if (req.user && req.user.role === 'admin') {
+            // Admin can see everything
+            return res.status(200).json({
+                success: true,
+                data: { tenant: tenantObj },
+            });
+        }
+
+        // Providers should NOT see tenant phone numbers (only basic info)
+        if (req.user && req.user.role === 'provider') {
+            if (tenantObj.userId) {
+                delete tenantObj.userId.phone;
+            }
+        }
+
+        // Tenants can see their own phone, but not others
+        if (req.user && req.user.role === 'tenant') {
+            if (tenantObj.userId && tenantObj.userId._id.toString() !== req.user._id.toString()) {
+                delete tenantObj.userId.phone;
+            }
+        }
+
+        // Public users cannot see phone
+        if (!req.user && tenantObj.userId) {
+            delete tenantObj.userId.phone;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: { tenant: tenantObj },
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 module.exports = {
     registerTenant,
     getMyProfile,
     updateProfile,
+    getTenantById,
 };
 

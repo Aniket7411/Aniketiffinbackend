@@ -11,10 +11,7 @@ const uploadKYC = async (req, res) => {
     try {
         const {
             aadharNumber,
-            aadharFront, // These would be file URLs after upload
-            aadharBack,
-            photo,
-            addressProof,
+            uploadedUrls,
         } = req.body;
 
         let profile;
@@ -38,10 +35,9 @@ const uploadKYC = async (req, res) => {
         // Update KYC documents
         profile.kycDocuments = {
             aadharNumber,
-            aadharFront,
-            aadharBack,
-            photo,
-            addressProof,
+            aadharFront: uploadedUrls?.aadharFront || '',
+            aadharBack: uploadedUrls?.aadharBack || '',
+            panCard: uploadedUrls?.panCard || '',
         };
         profile.kycStatus = 'submitted';
 
@@ -174,10 +170,94 @@ const getPendingKYC = async (req, res) => {
     }
 };
 
+// @desc    Get KYC documents
+// @route   GET /api/kyc/documents
+// @access  Private
+const getKYCDocuments = async (req, res) => {
+    try {
+        let profile;
+
+        if (req.user.role === 'provider') {
+            profile = await Provider.findOne({ userId: req.user._id }).select('kycDocuments');
+        } else if (req.user.role === 'tenant') {
+            profile = await Tenant.findOne({ userId: req.user._id }).select('kycDocuments');
+        }
+
+        if (!profile) {
+            return res.status(404).json({
+                success: false,
+                message: 'Profile not found',
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                documents: profile.kycDocuments || {},
+            },
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
+// @desc    Delete KYC document
+// @route   DELETE /api/kyc/document/:docType
+// @access  Private
+const deleteKYCDocument = async (req, res) => {
+    try {
+        const { docType } = req.params;
+        const validDocTypes = ['aadharFront', 'aadharBack', 'panCard'];
+
+        if (!validDocTypes.includes(docType)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid document type',
+            });
+        }
+
+        let profile;
+
+        if (req.user.role === 'provider') {
+            profile = await Provider.findOne({ userId: req.user._id });
+        } else if (req.user.role === 'tenant') {
+            profile = await Tenant.findOne({ userId: req.user._id });
+        }
+
+        if (!profile) {
+            return res.status(404).json({
+                success: false,
+                message: 'Profile not found',
+            });
+        }
+
+        // Delete the specific document
+        if (profile.kycDocuments && profile.kycDocuments[docType]) {
+            profile.kycDocuments[docType] = '';
+            await profile.save();
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Document deleted successfully',
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 module.exports = {
     uploadKYC,
     getKYCStatus,
     verifyKYC,
     getPendingKYC,
+    getKYCDocuments,
+    deleteKYCDocument,
 };
 

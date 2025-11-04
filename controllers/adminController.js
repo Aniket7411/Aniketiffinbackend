@@ -192,14 +192,13 @@ const updateVendorStatus = async (req, res) => {
 const getDashboardStats = async (req, res) => {
   try {
     // Total counts
-    const totalUsers = await User.countDocuments();
     const totalProviders = await Provider.countDocuments();
+    const activeProviders = await Provider.countDocuments({ isActive: true });
     const totalTenants = await Tenant.countDocuments();
-    const totalAdmins = await User.countDocuments({ role: 'admin' });
-    const premiumUsers = await User.countDocuments({ isPremium: true });
+    const activeTenants = await Tenant.countDocuments({ isActive: true });
     
     // Active subscriptions
-    const activeConnections = await require('../models/ConnectionRequest').countDocuments({ status: 'accepted' });
+    const activeSubscriptions = await Subscription.countDocuments({ status: 'active' });
     
     // Pending KYC
     const pendingKYC = await Provider.countDocuments({ kycStatus: 'submitted' }) +
@@ -216,24 +215,35 @@ const getDashboardStats = async (req, res) => {
     const thisMonthRevenue = 0; // Will be calculated from payment records
     const lastMonthRevenue = 0; // Will be calculated from payment records
     
-    const growth = lastMonthRevenue > 0 
-      ? (((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100).toFixed(1) 
-      : '0';
+    const monthlyGrowth = lastMonthRevenue > 0 
+      ? parseFloat((((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100).toFixed(1))
+      : 0;
+
+    // Today's stats
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayUsers = await User.countDocuments({ createdAt: { $gte: today } });
+    const todaySubscriptions = await Subscription.countDocuments({ createdAt: { $gte: today } });
+    const todayRevenue = 0; // Will be calculated from payment records
 
     res.status(200).json({
       success: true,
       data: {
-        totalUsers,
-        totalProviders,
-        totalTenants,
-        totalAdmins,
-        premiumUsers,
-        activeConnections,
-        pendingKYC,
-        revenue: {
-          thisMonth: thisMonthRevenue,
-          lastMonth: lastMonthRevenue,
-          growth: `${growth}%`,
+        overview: {
+          totalProviders,
+          activeProviders,
+          totalTenants,
+          activeTenants,
+          activeSubscriptions,
+          totalRevenue: thisMonthRevenue,
+          monthlyGrowth,
+          pendingKYC,
+          todayRegistrations: todayUsers,
+          today: {
+            newRegistrations: todayUsers,
+            newSubscriptions: todaySubscriptions,
+            revenue: todayRevenue,
+          },
         },
       },
     });
@@ -386,12 +396,323 @@ const revokePremium = async (req, res) => {
   }
 };
 
+// @desc    Get all providers (Admin)
+// @route   GET /api/admin/providers
+// @access  Private (Admin only)
+const getProviders = async (req, res) => {
+  try {
+    const { search, status, kycStatus } = req.query;
+
+    const filter = {};
+    if (status) {
+      filter.isActive = status === 'active';
+    }
+    if (kycStatus) {
+      filter.kycStatus = kycStatus;
+    }
+
+    const providers = await Provider.find(filter)
+      .populate('userId', 'name email phone')
+      .sort({ createdAt: -1 });
+
+    // Apply search filter if provided
+    let filteredProviders = providers;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredProviders = providers.filter(provider => 
+        provider.displayName.toLowerCase().includes(searchLower) ||
+        provider.userId?.name?.toLowerCase().includes(searchLower) ||
+        provider.userId?.email?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Format response
+    const formattedProviders = filteredProviders.map(provider => ({
+      _id: provider._id,
+      name: provider.userId?.name || '',
+      displayName: provider.displayName,
+      email: provider.userId?.email || '',
+      location: provider.location?.area && provider.location?.city 
+        ? `${provider.location.area}, ${provider.location.city}` 
+        : '',
+      rating: provider.rating,
+      currentTenants: provider.currentTenants,
+      maxTenants: provider.maxTenants,
+      kycStatus: provider.kycStatus,
+      isActive: provider.isActive,
+      isPremium: provider.userId?.isPremium || false,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        providers: formattedProviders,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Get all tenants (Admin)
+// @route   GET /api/admin/tenants
+// @access  Private (Admin only)
+const getTenants = async (req, res) => {
+  try {
+    const { search, status, kycStatus } = req.query;
+
+    const filter = {};
+    if (status) {
+      filter.isActive = status === 'active';
+    }
+    if (kycStatus) {
+      filter.kycStatus = kycStatus;
+    }
+
+    const tenants = await Tenant.find(filter)
+      .populate('userId', 'name email phone')
+      .sort({ createdAt: -1 });
+
+    // Apply search filter if provided
+    let filteredTenants = tenants;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredTenants = tenants.filter(tenant => 
+        tenant.displayName.toLowerCase().includes(searchLower) ||
+        tenant.userId?.name?.toLowerCase().includes(searchLower) ||
+        tenant.userId?.email?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Get subscription counts for each tenant
+    const formattedTenants = await Promise.all(filteredTenants.map(async (tenant) => {
+      const activeSubscriptions = await Subscription.countDocuments({
+        tenantUserId: tenant.userId,
+        status: 'active',
+      });
+
+      const totalSpent = 0; // TODO: Calculate from payment records
+
+      return {
+        _id: tenant._id,
+        name: tenant.userId?.name || '',
+        displayName: tenant.displayName,
+        email: tenant.userId?.email || '',
+        location: tenant.location?.area && tenant.location?.city 
+          ? `${tenant.location.area}, ${tenant.location.city}` 
+          : '',
+        accommodationType: tenant.accommodationType,
+        activeSubscriptions,
+        totalSpent,
+        kycStatus: tenant.kycStatus,
+        isActive: tenant.isActive,
+        isPremium: tenant.userId?.isPremium || false,
+      };
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        tenants: formattedTenants,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Get all connection requests (Admin)
+// @route   GET /api/admin/connection-requests
+// @access  Private (Admin only)
+const getConnectionRequests = async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    const filter = {};
+    if (status) {
+      filter.status = status;
+    }
+
+    const requests = await require('../models/ConnectionRequest').find(filter)
+      .populate('tenantId')
+      .populate('tenantUserId', 'name email')
+      .populate('providerId')
+      .populate('providerUserId', 'name email')
+      .sort({ createdAt: -1 });
+
+    // Format response
+    const formattedRequests = requests.map(request => ({
+      _id: request._id,
+      tenant: {
+        _id: request.tenantId._id,
+        displayName: request.tenantId.displayName,
+        email: request.tenantUserId.email,
+        monthlyBudget: request.monthlyBudget,
+      },
+      provider: {
+        _id: request.providerId._id,
+        displayName: request.providerId.displayName,
+        email: request.providerUserId.email,
+      },
+      message: request.message,
+      monthlyBudget: request.monthlyBudget,
+      status: request.status,
+      createdAt: request.createdAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        requests: formattedRequests,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Delete user (Admin)
+// @route   DELETE /api/admin/users/:userId
+// @access  Private (Admin only)
+const deleteUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    if (user.role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot delete admin user',
+      });
+    }
+
+    // Delete associated profile
+    if (user.role === 'provider') {
+      await Provider.findOneAndDelete({ userId: user._id });
+    } else if (user.role === 'tenant') {
+      await Tenant.findOneAndDelete({ userId: user._id });
+    }
+
+    await User.findByIdAndDelete(req.params.userId);
+
+    res.status(200).json({
+      success: true,
+      message: 'User deleted successfully',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Update premium status (Admin)
+// @route   PUT /api/admin/providers/:userId/premium
+// @route   PUT /api/admin/tenants/:userId/premium
+// @access  Private (Admin only)
+const updatePremiumStatus = async (req, res) => {
+  try {
+    const { isPremium } = req.body;
+    const userId = req.params.userId;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    user.isPremium = isPremium;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Premium status ${isPremium ? 'granted' : 'revoked'}`,
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          isPremium: user.isPremium,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Get user details by ID (Admin)
+// @route   GET /api/admin/providers/:userId
+// @route   GET /api/admin/tenants/:userId
+// @access  Private (Admin only)
+const getUserDetails = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const userType = req.path.includes('/providers/') ? 'provider' : 'tenant';
+
+    const user = await User.findById(userId).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    let profile;
+    if (userType === 'provider') {
+      profile = await Provider.findOne({ userId }).populate('userId');
+    } else {
+      profile = await Tenant.findOne({ userId }).populate('userId');
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user,
+        profile,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getDashboardStats,
   toggleUserStatus,
   grantPremium,
   revokePremium,
+  getProviders,
+  getTenants,
+  getConnectionRequests,
+  deleteUser,
+  updatePremiumStatus,
+  getUserDetails,
   // Old exports (commented - kept for future)
   // getAllOrders,
   // getAllVendors,
